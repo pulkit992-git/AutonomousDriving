@@ -17,8 +17,9 @@ public class AutonomousDriving : ModuleRules
 			"ChaosVehicles",
 			"PhysicsCore",
 			"UMG",
-			"Slate"
-		});
+			"Slate",
+            "ImageWrapper"
+        });
 
 		PublicIncludePaths.AddRange(new string[] {
 			"AutonomousDriving",

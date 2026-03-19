@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/SceneCaptureComponent2D.h"
+#include "ChaosWheeledVehicleMovementComponent.h"
 #include "CameraDataComponent.generated.h"
 
 /**
@@ -22,4 +23,16 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Perception")
 	UTextureRenderTarget2D* CameraViewTarget;
+
+private:
+	void SaveImageToDisk(const TArray<FColor>& RawPixels, float SteeringAngle);
+	int32 FrameCounter = 0;
+
+	UPROPERTY()
+	UChaosWheeledVehicleMovementComponent* VehicleMovement;
+
+	FTimerHandle RecordTimerHandle;
+
+protected:
+	void BeginPlay();
 };

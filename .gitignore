@@ -73,3 +73,9 @@ Plugins/**/Intermediate/*
 
 # Cache files for the editor to use
 DerivedDataCache/*
+
+# Ignore AI training data
+/Saved/Captures/
+*.jpg
+*.jpeg
+*.csv
