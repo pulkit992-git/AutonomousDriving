@@ -7,6 +7,8 @@
 #include "IImageWrapper.h"
 #include "IImageWrapperModule.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "HAL/PlatformFileManager.h"
 
 UCameraDataComponent::UCameraDataComponent()
 {
@@ -17,14 +19,20 @@ void UCameraDataComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
+	ImageWrapperModule = &FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
+
+	FString SessionName = FString::Printf(TEXT("Session_%s"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+	CaptureDir = FPaths::ProjectSavedDir() / TEXT("Captures") / SessionName;
+
 	//Force the folder to exist
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-	FString TotalPath = FPaths::ProjectSavedDir() / TEXT("Captures");
 
-	if (!PlatformFile.DirectoryExists(*TotalPath))
+	if (!PlatformFile.DirectoryExists(*CaptureDir))
 	{
-		PlatformFile.CreateDirectory(*TotalPath);
+		PlatformFile.CreateDirectory(*CaptureDir);
 	}
+
+	CSVPath = CaptureDir / TEXT("labels.csv");
 
 	//Start the timer (Check if the World exists first)
 	if (GetWorld())
@@ -35,9 +43,24 @@ void UCameraDataComponent::BeginPlay()
 	}
 }
 
+void UCameraDataComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	Super::EndPlay(EndPlayReason);
+	StopRecording();
+	UE_LOG(LogTemp, Warning, TEXT("CameraDataComponent stopped, Total frame %d"), FrameCounter);
+}
+
+void UCameraDataComponent::InitCSV()
+{
+	FString Header = TEXT("filename, steering, throttle, brake, timestamp\n");
+	FFileHelper::SaveStringToFile(Header, *CSVPath);
+	bCSVInitialised = true;
+	UE_LOG(LogTemp, Warning, TEXT("CSV initialised at %s"), *CSVPath);
+}
+
 void UCameraDataComponent::CaptureFrame()
 {
-	if (!TextureTarget)
+	if (!TextureTarget || !bIsRecording)
 		return;
 
 	if (!VehicleMovement) {
@@ -46,33 +69,94 @@ void UCameraDataComponent::CaptureFrame()
 	}
 
 	float CurrentSteering = VehicleMovement ? VehicleMovement->GetSteeringInput() : 0.0f;
+	float CurrentThrottle = VehicleMovement ? VehicleMovement->GetThrottleInput() : 0.0f;
+	float CurrentBrake = VehicleMovement ? VehicleMovement->GetBrakeInput() : 0.0f;
 
 	FTextureRenderTargetResource* RenderTargetResource = TextureTarget->GameThread_GetRenderTargetResource();
+
+	if (!RenderTargetResource)
+		return;
 
 	TArray<FColor> RawPixels;
 	RenderTargetResource->ReadPixels(RawPixels);
 
 	if (RawPixels.Num() > 0)
 	{
-	//	UE_LOG(LogTemp, Display, TEXT ("AI Camera captured %d pixels"), RawPixels.Num());
-		SaveImageToDisk(RawPixels, CurrentSteering);
+		int32 Width = TextureTarget->SizeX;
+		int32 Height = TextureTarget->SizeY;
+
+		SaveImageToDisk(RawPixels, CurrentSteering, Width, Height);
+
+		WriteCSVRow(FString::Printf(TEXT("frame_%05d.jpg"), FrameCounter - 1), CurrentSteering);
 	}
 }
 
-void UCameraDataComponent::SaveImageToDisk(const TArray<FColor>& RawPixels, float SteeringAngle)
+void UCameraDataComponent::SaveImageToDisk(const TArray<FColor>& RawPixels, float SteeringAngle, int32 Width, int32 Height)
 {
-	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
-	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::JPEG);
+	if (!ImageWrapperModule)
+		return;
+	
+	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule->CreateImageWrapper(EImageFormat::JPEG);
 
 	// Set the raw data
-	ImageWrapper->SetRaw(RawPixels.GetData(), RawPixels.Num() * sizeof(FColor), 224, 224, ERGBFormat::BGRA, 8);
+	ImageWrapper->SetRaw(RawPixels.GetData(), RawPixels.Num() * sizeof(FColor), Width, Height, ERGBFormat::BGRA, 8);
 
 	// Compressed data
-	const TArray64<uint8>& CompressedData = ImageWrapper->GetCompressed(100);
+	const TArray64<uint8>& CompressedData = ImageWrapper->GetCompressed(85);
 
 	// Create a filename like: Steering_0.5_123.jpg
-	FString Filename = FPaths::ProjectSavedDir() / TEXT("Captures") /
-		FString::Printf(TEXT("Steer_%f_Frame_%d.jpg"), SteeringAngle, FrameCounter++);
+	FString Filename = CaptureDir / FString::Printf(TEXT("frame_%05d.jpg"), FrameCounter++);
 
 	FFileHelper::SaveArrayToFile(CompressedData, *Filename);
 }
+
+void UCameraDataComponent::WriteCSVRow(const FString& Filename, float SteeringAngle)
+{
+	if (!bCSVInitialised)
+		return;
+
+	// Append one row per frame
+	FString Row = FString::Printf(
+		TEXT("%s,%.4f,%.4f,%.4f,%lld\n"),
+		*Filename,
+		SteeringAngle,
+		0.0f, // throttle placeholder — hook up same as steering
+		0.0f, // brake placeholder
+		FDateTime::Now().ToUnixTimestamp()
+	);
+
+	FFileHelper::SaveStringToFile(
+		Row,
+		*CSVPath,
+		FFileHelper::EEncodingOptions::AutoDetect,
+		&IFileManager::Get(),
+		FILEWRITE_Append  // Append not overwrite
+	);
+}
+
+void UCameraDataComponent::StartRecording()
+{
+	if (GetWorld() && !bIsRecording)
+	{
+		bIsRecording = true;
+		GetWorld()->GetTimerManager().SetTimer(
+			RecordTimerHandle,
+			this,
+			&UCameraDataComponent::CaptureFrame,
+			0.1f,
+			true
+		);
+		UE_LOG(LogTemp, Warning, TEXT("Recording STARTED"));
+	}
+}
+
+void UCameraDataComponent::StopRecording()
+{
+	if (GetWorld() && bIsRecording)
+	{
+		bIsRecording = false;
+		GetWorld()->GetTimerManager().ClearTimer(RecordTimerHandle);
+		UE_LOG(LogTemp, Warning, TEXT("Recording STOPPED. Frames saved: %d"), FrameCounter);
+	}
+}
+

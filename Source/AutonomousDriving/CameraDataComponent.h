@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "ChaosWheeledVehicleMovementComponent.h"
+#include "Engine/EngineTypes.h"
 #include "CameraDataComponent.generated.h"
 
 /**
@@ -24,9 +25,30 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Perception")
 	UTextureRenderTarget2D* CameraViewTarget;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AI Perception")
+	bool bIsRecording = false;
+
+	UFUNCTION(BlueprintCallable, Category = "AI Perception")
+	void StartRecording();
+
+	UFUNCTION(BlueprintCallable, Category = "AI Perception")
+	void StopRecording();
+
 private:
-	void SaveImageToDisk(const TArray<FColor>& RawPixels, float SteeringAngle);
+
+	void SaveImageToDisk(const TArray<FColor>& RawPixels, float SteeringAngle, int32 Width, int32 Height);
+
+	void WriteCSVRow(const FString& Filename, float SteeringAngle);
+
+	void InitCSV();
+
+	IImageWrapperModule* ImageWrapperModule = nullptr;
+
 	int32 FrameCounter = 0;
+
+	FString CaptureDir;
+	FString CSVPath;
+	bool bCSVInitialised = false;
 
 	UPROPERTY()
 	UChaosWheeledVehicleMovementComponent* VehicleMovement;
@@ -34,5 +56,7 @@ private:
 	FTimerHandle RecordTimerHandle;
 
 protected:
-	void BeginPlay();
+	virtual void BeginPlay() override;
+
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 };
